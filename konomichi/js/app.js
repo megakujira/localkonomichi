@@ -118,9 +118,35 @@ async function loadData(lat, lon, need, status) {
   return { area, reused: false };
 }
 
+// ---------------- スマホ: パネルの開閉 ----------------
+const isWide = () => window.matchMedia('(min-width: 900px)').matches;
+function setSummary(text) {
+  $('#sheetSummary').replaceChildren(el('span', { class: 't' }, text), el('span', { class: 'open', 'aria-hidden': 'true' }, '▲ 開く'));
+}
+function setSheet(min) {
+  if (document.body.classList.contains('sheet-min') === min) return;
+  document.body.classList.toggle('sheet-min', min);
+  const h = $('#sheetHandle');
+  h.setAttribute('aria-expanded', String(!min));
+  h.setAttribute('aria-label', min ? 'パネルを開く' : 'パネルを縮めて地図を大きく表示');
+  requestAnimationFrame(() => { map.invalidateSize(); if (S.results) fitRoute(); });
+}
+{
+  const h = $('#sheetHandle');
+  let y0 = null, moved = false;
+  h.addEventListener('click', () => { if (moved) { moved = false; return; } setSheet(!document.body.classList.contains('sheet-min')); });
+  h.addEventListener('pointerdown', e => { y0 = e.clientY; moved = false; });
+  h.addEventListener('pointerup', e => {
+    if (y0 == null) return;
+    const dy = e.clientY - y0; y0 = null;
+    if (Math.abs(dy) > 24) { moved = true; setSheet(dy > 0); }   // 下へスワイプで縮める / 上へで開く
+  });
+  h.addEventListener('pointercancel', () => { y0 = null; });
+}
+
 // ---------------- 画面: 設定 ----------------
 const view = $('#view');
-function clearResults() { S.results = null; routeLayer.clearLayers(); }
+function clearResults() { S.results = null; S.routeBounds = null; routeLayer.clearLayers(); }
 
 function seg(items, current, onPick, cls = '') {
   return el('div', { class: `seg c3 ${cls}`, role: 'group' }, items.map(([v, em, label, sub]) =>
@@ -147,6 +173,7 @@ function renderSetup() {
   const bundled = PRESETS.some(p => covers({ lat: p.lat, lon: p.lon }, DATA_RADIUS, S.start.lat, S.start.lon, need));
   const dataNote = bundled ? '同梱データで即時に検索できます' : S.area && covers(S.area.center, S.area.radius, S.start.lat, S.start.lon, need) ? '読み込み済みのデータを使います' : '初回は OpenStreetMap から取得します（30秒以上かかることがあります）';
 
+  setSummary(`📍 ${S.start.label || '指定した地点'} ・ ${S.minutes}分 ・ ${PREF[S.pref].label}`);
   view.replaceChildren(
     el('div', { class: 'field' },
       el('span', { class: 'label' }, '出発地'),
@@ -177,6 +204,7 @@ function useMyLocation() {
 
 // ---------------- 検索 ----------------
 function renderLoading(msg, progress = null) {
+  setSummary(`⏳ ${msg}${progress != null ? ` ${Math.round(progress * 100)}%` : ''}`);
   view.replaceChildren(el('div', { class: 'loading' }, el('div', { class: 'spinner', 'aria-hidden': 'true' }), el('div', { class: 'msg' }, msg),
     progress != null ? el('div', { class: 'bar' }, el('i', { style: `width:${Math.round(progress * 100)}%` })) : null,
     el('div', { class: 'sub' }, '地図データ © OpenStreetMap contributors')));
@@ -217,6 +245,8 @@ function renderResults() {
   const g = S.area.graph;
   const children = [];
   const best = routes[0];
+  const cur = routes[S.selected];
+  setSummary(cur ? `${S.selected === 0 ? '★ ' : ''}${cur.title} ・ 約${Math.round(cur.minutes)}分` : '条件に合うルートが見つかりませんでした');
   const sat = best ? (S.pref === 'green' ? best.stats.greenShare : S.pref === 'water' ? best.stats.waterShare : best.stats.anyShare) : 0;
   if (!best) {
     children.push(el('div', { class: 'notice' }, el('b', {}, '条件に合うルートが見つかりませんでした'), '時間を長くするか、出発地を変えてみてください。'));
@@ -259,9 +289,15 @@ function drawRoutes() {
     const pl = L.polyline(s.pts, { color: COLORS[s.type], weight: 6, opacity: 1, lineCap: 'round', lineJoin: 'round', interactive: false }).addTo(routeLayer);
     bounds = bounds ? bounds.extend(pl.getBounds()) : pl.getBounds();
   }
-  const wide = window.matchMedia('(min-width: 900px)').matches;
+  S.routeBounds = bounds;
+  fitRoute();
+}
+
+// 選択中のルート全体が、パネルに隠れずに見えるように地図を合わせる
+function fitRoute() {
+  const bounds = S.routeBounds; if (!bounds || S.guide) return;
   const panelH = $('#panel').offsetHeight;
-  if (bounds) map.fitBounds(bounds, wide ? { paddingTopLeft: [430, 30], paddingBottomRight: [30, 30] } : { paddingTopLeft: [20, 20], paddingBottomRight: [20, Math.min(panelH, window.innerHeight * 0.68) + 20] });
+  map.fitBounds(bounds, isWide() ? { paddingTopLeft: [430, 30], paddingBottomRight: [30, 30] } : { paddingTopLeft: [20, 20], paddingBottomRight: [20, Math.min(panelH, window.innerHeight * 0.68) + 20] });
 }
 
 // ---------------- 案内 ----------------
@@ -347,7 +383,8 @@ function renderGuide() {
   }
   const bottom = $('#guideBottom');
   bottom.replaceChildren(
-    el('div', { class: 'stats' }, el('b', {}, done ? '到着' : `残り ${min}分`), el('span', {}, `${(remain / 1000).toFixed(2)}km`), el('span', { class: 'fine' }, G.lastFix ? 'GPS測位中' : (G.sim ? 'デモ歩行中' : 'GPS待機中'))),
+    el('div', { class: 'stats' }, el('b', {}, done ? '到着' : `残り ${min}分`), el('span', {}, `${(remain / 1000).toFixed(2)}km`), el('span', { class: 'fine' }, G.lastFix ? 'GPS測位中' : (G.sim ? 'デモ歩行中' : 'GPS待機中')),
+      el('button', { class: 'fold', type: 'button', 'aria-expanded': String(!G.compact), 'aria-label': G.compact ? '操作ボタンを表示' : '小さくして地図を広く表示', onclick: () => { G.compact = !G.compact; document.body.classList.toggle('guide-compact', G.compact); renderGuide(); } }, G.compact ? '▲' : '▼')),
     el('div', { class: 'bar' }, el('i', { style: `width:${Math.round(G.along / G.total * 100)}%` })),
     el('div', { class: 'btns' },
       G.offCount >= 3 ? el('button', { class: 'btn primary', type: 'button', onclick: replan }, 'ここから引き直す') : el('button', { class: 'btn', type: 'button', onclick: toggleSim }, G.sim ? '一時停止' : 'デモ歩行 ×30'),
@@ -367,7 +404,7 @@ function endGuide() {
   if (meMarker) { map.removeLayer(meMarker); meMarker = null; }
   S.guide = null;
   $('#guideTop').classList.add('hidden'); $('#guideBottom').classList.add('hidden'); $('#btnRecenter').classList.add('hidden'); $('#panel').classList.remove('hidden');
-  document.body.classList.remove('guiding');
+  document.body.classList.remove('guiding', 'guide-compact');
   if (S.results) { renderResults(); } else renderSetup();
 }
 

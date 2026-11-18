@@ -38,10 +38,26 @@ button { font: inherit; color: inherit; cursor: pointer; }
   background: var(--surface); border-radius: 22px 22px 0 0; box-shadow: var(--shadow);
   padding: 14px 16px calc(16px + env(safe-area-inset-bottom));
 }
-#panel::before { content: ""; display: block; width: 40px; height: 4px; border-radius: 4px; background: var(--line); margin: -4px auto 10px; }
+/* スマホ: 上のつまみで「全体表示 ⇔ 1行だけ」を切り替え、地図を大きく使えるようにする */
+#sheetHandle {
+  display: block; width: calc(100% + 32px); margin: -14px -16px 6px; padding: 10px 16px 6px;
+  border: 0; background: transparent; touch-action: none; text-align: left;
+}
+#sheetHandle .grip { display: block; width: 44px; height: 5px; border-radius: 5px; background: #c9d4cd; margin: 0 auto; }
+#sheetSummary { display: none; }
+@media (max-width: 899px) {
+  body.sheet-min #panel { max-height: none; overflow: hidden; padding-top: 14px; padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
+  body.sheet-min #panel .brand, body.sheet-min #view { display: none; }
+  body.sheet-min #sheetSummary {
+    display: flex; align-items: center; gap: 8px; margin-top: 8px; font-weight: 700; font-size: .92rem;
+  }
+  #sheetSummary .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #sheetSummary .open { flex: none; font-size: .78rem; font-weight: 700; color: var(--green-d); background: var(--green-t); border-radius: 999px; padding: 4px 10px; }
+  body.sheet-min #mapTools { top: auto; bottom: calc(92px + env(safe-area-inset-bottom)); right: 10px; }
+}
 @media (min-width: 900px) {
   #panel { left: 16px; top: 16px; bottom: 16px; right: auto; width: 400px; max-height: none; border-radius: 22px; }
-  #panel::before { display: none; }
+  #sheetHandle { display: none; }
 }
 .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 .brand h1 { font-size: 1.25rem; margin: 0; line-height: 1.2; letter-spacing: .04em; }
@@ -132,6 +148,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
 #guideBottom .stats b { font-size: 1.5rem; }
 #guideBottom .btns { display: flex; gap: 8px; margin-top: 10px; }
 #guideBottom .btns .btn { flex: 1; }
+#guideBottom .stats .fold { margin-left: auto; border: 1px solid var(--line); background: #fff; border-radius: 999px; min-width: 44px; min-height: 36px; font-size: .8rem; font-weight: 700; color: var(--muted); }
+body.guide-compact #guideBottom .bar, body.guide-compact #guideBottom .btns { display: none; }
+body.guiding.guide-compact #mapTools, body.guiding.guide-compact #btnRecenter { bottom: calc(76px + env(safe-area-inset-bottom)); }
 #btnRecenter {
   position: absolute; z-index: 600; left: 10px; bottom: calc(150px + env(safe-area-inset-bottom));
   border: 0; border-radius: 999px; padding: 10px 16px; min-height: 44px; font-weight: 700;
@@ -157,6 +176,8 @@ dialog th { color: var(--muted); font-weight: 600; width: 46%; }
 .fine { font-size: .72rem; color: var(--muted); }
 .leaflet-container { font-family: inherit; }
 .leaflet-control-attribution { font-size: 10px; }
+/* スマホの案内中は、上の案内表示とズームボタンが重ならないよう下にずらす */
+@media (max-width: 899px) { body.guiding .leaflet-top.leaflet-right { top: calc(150px + env(safe-area-inset-top)); } body.guiding #toast { top: calc(150px + env(safe-area-inset-top)); } }
 .pin-start { background: var(--green-d); color: #fff; border: 3px solid #fff; border-radius: 50%; width: 30px; height: 30px; display: grid; place-items: center; font-weight: 800; box-shadow: 0 2px 8px rgba(0,0,0,.4); }
 .pin-me { background: #1c5fb5; border: 4px solid #fff; border-radius: 50%; width: 22px; height: 22px; box-shadow: 0 0 0 6px rgba(28, 95, 181, .25), 0 2px 6px rgba(0,0,0,.4); }
 .pin-turn { background: #fff; border: 2px solid var(--green-d); border-radius: 50%; width: 14px; height: 14px; }
