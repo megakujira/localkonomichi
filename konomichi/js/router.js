@@ -1,6 +1,6 @@
 // 周遊ルートの自動生成（企画書 機能1「緑・水辺ルート検索」＋機能2「所要時間の指定」）と、ターン案内の生成。
 import { bearing, angleDiff, distPointSeg } from './geo.js';
-import { CROSS_MARKED, CROSS_UNMARKED } from './graph.js';
+import { CROSS_MARKED, CROSS_UNMARKED, CROSS_LEVELS } from './graph.js';
 
 export const SPEEDS = { slow: 60, normal: 80, fast: 100 }; // m/分（80m/分 = 4.8km/h）
 const SCENIC_K = 3;      // 景観の乏しい道に掛ける割増（コスト = 長さ × (1 + K × (1 - 景観スコア)) × 道種係数）
@@ -38,7 +38,8 @@ class Heap {
 // ---------------- A* ----------------
 // 状態は「どのスロット(向き付きエッジ)で着いたか」。道から道への乗り換え(=車道の横断)にコストを掛けるため。
 // inSlot: 前の区間から src に着いた向き（src から見て来た道を逆にたどるスロット）。つなぎ目での横断も判定する
-function astar(g, src, dst, base, used, inSlot = -1) {
+// level: 横断歩道を必ず使う車道の段階（CROSS_LEVELS）
+function astar(g, src, dst, base, used, inSlot = -1, level = CROSS_LEVELS.residential) {
   if (src === dst) return { nodes: [src], edges: [] };
   const S = g.adjNode.length;
   const ws = g._ws || (g._ws = { dist: new Float64Array(S), prev: new Int32Array(S), closed: new Uint8Array(S) });
@@ -50,7 +51,7 @@ function astar(g, src, dst, base, used, inSlot = -1) {
   const heap = new Heap();
   for (let k = g.adjStart[src]; k < g.adjStart[src + 1]; k++) {
     let c = cost(g.adjEdge[k]);
-    if (inSlot >= 0) { const x = g.crossingAt(src, inSlot, k); if (x) c += CROSS_COST[x]; }
+    if (inSlot >= 0) { const x = g.crossingAt(src, inSlot, k, level); if (x) c += CROSS_COST[x]; }
     if (c < dist[k]) { dist[k] = c; prev[k] = -1; heap.push(c + h(g.adjNode[k]), k); }
   }
   let goal = -1;
@@ -64,7 +65,7 @@ function astar(g, src, dst, base, used, inSlot = -1) {
     for (let q = g.adjStart[v]; q < g.adjStart[v + 1]; q++) {
       if (q === back || closed[q]) continue;     // その場で引き返さない
       let nd = dist[k] + cost(g.adjEdge[q]);
-      const x = g.crossingAt(v, back, q);
+      const x = g.crossingAt(v, back, q, level);
       if (x) nd += CROSS_COST[x];
       if (nd === Infinity) continue;
       if (nd < dist[q]) { dist[q] = nd; prev[q] = k; heap.push(nd + h(g.adjNode[q]), q); }
@@ -78,11 +79,11 @@ function astar(g, src, dst, base, used, inSlot = -1) {
 }
 
 // ルート中で幹線車道を横切る回数（横断歩道あり / なし）
-export function countCrossings(g, nodes, edges) {
+export function countCrossings(g, nodes, edges, level = CROSS_LEVELS.residential) {
   let marked = 0, unmarked = 0;
   const at = [];
   for (let i = 1; i < edges.length; i++) {
-    const v = nodes[i], x = g.crossingAt(v, g.slotOf(v, edges[i - 1]), g.slotOf(v, edges[i]));
+    const v = nodes[i], x = g.crossingAt(v, g.slotOf(v, edges[i - 1]), g.slotOf(v, edges[i]), level);
     if (x === CROSS_MARKED) marked++;
     else if (x === CROSS_UNMARKED) { unmarked++; at.push(i); }
   }
@@ -114,7 +115,7 @@ function markUsed(g, used, nodes, edges) {
 
 // 短い寄り道(歩道を進んで並行する道で戻る等)を、出発点と戻り点を直接つなぐ道に置き換える
 const EXC_MAX = 250, EXC_NEAR = 25;
-function shortcutExcursions(g, nodes, edges, base) {
+function shortcutExcursions(g, nodes, edges, base, level) {
   let N = nodes.slice(), E = edges.slice();
   for (let guard = 0; guard < 50; guard++) {
     const cum = [0]; for (let i = 0; i < E.length; i++) cum.push(cum[i] + g.elen[E[i]]);
@@ -129,7 +130,7 @@ function shortcutExcursions(g, nodes, edges, base) {
       const j = bestJ;
       if (i === 0 && j === N.length - 1) continue;   // 出発地に戻る周回そのものは潰さない
       let seg = { nodes: [N[i]], edges: [] };
-      if (N[i] !== N[j]) { seg = astar(g, N[i], N[j], base, null); if (!seg) continue; }
+      if (N[i] !== N[j]) { seg = astar(g, N[i], N[j], base, null, i > 0 ? g.slotOf(N[i], E[i - 1]) : -1, level); if (!seg) continue; }
       const segLen = seg.edges.reduce((a, e) => a + g.elen[e], 0);
       if (segLen >= (cum[j] - cum[i]) * 0.6) continue;
       N = N.slice(0, i).concat(seg.nodes, N.slice(j + 1));
@@ -202,8 +203,10 @@ function objective(pref, m, { turns, uturns }, L, cross) {
 const jaccard = (a, b) => { let inter = 0; for (const x of a) if (b.has(x)) inter++; return inter / (a.size + b.size - inter || 1); };
 
 // ---------------- 周遊ルート生成 ----------------
-export async function generateLoops(g, startNode, { pref = 'both', minutes = 30, speed = SPEEDS.normal, onProgress } = {}) {
+// crossing: 横断歩道を必ず使う道 'major'(幹線道路のみ) / 'residential'(住宅街の道まで) / 'all'(すべて)
+export async function generateLoops(g, startNode, { pref = 'both', minutes = 30, speed = SPEEDS.normal, crossing = 'residential', onProgress } = {}) {
   const t0 = performance.now();
+  const level = CROSS_LEVELS[crossing] ?? CROSS_LEVELS.residential;
   const L = minutes * speed;
   const s = g.scenic(pref);
   const base = new Float32Array(g.m);
@@ -266,14 +269,14 @@ export async function generateLoops(g, startNode, { pref = 'both', minutes = 30,
         let nodes = [startNode], edges = [];
         let ok = true;
         for (const [from, to] of [[startNode, A], [A, B], [B, startNode]]) {
-          const r = astar(g, from, to, base, used, edges.length ? g.slotOf(from, edges[edges.length - 1]) : -1);
+          const r = astar(g, from, to, base, used, edges.length ? g.slotOf(from, edges[edges.length - 1]) : -1, level);
           if (!r) { ok = false; break; }
           markUsed(g, used, r.nodes, r.edges);
           nodes.push(...r.nodes.slice(1)); edges.push(...r.edges);
         }
         if (!ok) break;
         ({ nodes, edges } = pruneSpurs(nodes, edges));
-        ({ nodes, edges } = shortcutExcursions(g, nodes, edges, base));
+        ({ nodes, edges } = shortcutExcursions(g, nodes, edges, base, level));
         ({ nodes, edges } = pruneSpurs(nodes, edges));
         let len = 0; for (const e of edges) len += g.elen[e];
         if (len < L * 0.2) break;                      // 潰れた経路は捨てる
@@ -290,7 +293,7 @@ export async function generateLoops(g, startNode, { pref = 'both', minutes = 30,
   for (const c of cands) {
     const m = evaluate(g, c.edges, c.nodes, L);
     if (m.len > L * 1.08 || m.len < L * 0.6) continue;           // 指定時間に収まらない
-    const tc = countTurns(g, c.nodes), cross = countCrossings(g, c.nodes, c.edges);
+    const tc = countTurns(g, c.nodes), cross = countCrossings(g, c.nodes, c.edges, level);
     if (cross.unmarked) continue;                                  // 横断歩道のない所で車道を渡るルートは出さない
     scored.push({ ...c, m, turns: tc.turns, crossings: cross, obj: objective(pref, m, tc, L, cross) });
   }

@@ -6,6 +6,8 @@ import { parseElements } from '../js/osm.js';
 import { Graph } from '../js/graph.js';
 import { generateLoops, buildInstructions, SPEEDS } from '../js/router.js';
 
+// 環境変数 CROSSING=major|residential|all で横断歩道の条件を切り替える（既定: residential）
+const crossing = process.env.CROSSING || 'residential';
 const only = process.argv.slice(2);
 const pct = x => `${Math.round(x * 100)}%`;
 for (const p of PRESETS) {
@@ -20,7 +22,7 @@ for (const p of PRESETS) {
   console.log(`出発地スナップ: ${start.dist.toFixed(0)}m`);
   for (const pref of ['green', 'water', 'both']) {
     for (const minutes of [15, 30, 60]) {
-      const { routes, diag } = await generateLoops(g, start.node, { pref, minutes, speed: SPEEDS.normal });
+      const { routes, diag } = await generateLoops(g, start.node, { pref, minutes, speed: SPEEDS.normal, crossing });
       const line = routes.map(r => `[${Math.round(r.lengthM)}m/${r.minutes.toFixed(0)}分 緑${pct(r.stats.greenShare)} 水${pct(r.stats.waterShare)} 近接${pct(r.stats.near)} 形${r.stats.compact.toFixed(2)} 曲がり${r.turns} 横断${r.crossings.marked}/無${r.crossings.unmarked}]`).join(' ');
       console.log(`${pref.padEnd(5)} ${String(minutes).padStart(2)}分 ${diag.ms}ms 候補${diag.valid}/${diag.candidates} → ${routes.length ? line : '該当なし'}`);
       if (routes[0] && pref === 'both' && minutes === 30) {

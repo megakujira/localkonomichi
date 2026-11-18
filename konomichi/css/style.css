@@ -78,6 +78,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .seg button[data-v="water"][aria-pressed="true"] { border-color: var(--water-d); background: var(--water-t); color: var(--water-d); }
 .seg button[data-v="both"][aria-pressed="true"] { border-color: #2a7d83; background: linear-gradient(90deg, var(--green-t), var(--water-t)); color: #1b5f66; }
 .seg.small button { min-height: 40px; font-size: .85rem; }
+.hint { margin: 6px 0 0; font-size: .74rem; color: var(--warn); }
 
 .range-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
 .range-row input[type=range] { flex: 1; accent-color: var(--green-d); height: 32px; }

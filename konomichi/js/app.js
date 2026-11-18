@@ -21,11 +21,13 @@ function el(tag, props = {}, ...kids) {
 
 const PREF = { green: { label: '緑', em: '🌳', sub: '公園・並木' }, water: { label: '水辺', em: '💧', sub: '川・池・海' }, both: { label: '両方', em: '🌳💧', sub: 'どちらも' } };
 const SPEED_LABEL = { slow: 'ゆっくり', normal: 'ふつう', fast: '速め' };
+const CROSS_OPT = { major: { label: '幹線道路のみ', sub: '大きな道' }, residential: { label: '住宅街の道まで', sub: 'おすすめ' }, all: { label: 'すべて', sub: '路地も含む' } };
 const ARROW = { start: '🚶', goal: '🏁', right: '→', left: '←', 'slight-right': '↗', 'slight-left': '↖', 'sharp-right': '↘', 'sharp-left': '↙', uturn: '↩' };
 
 const S = {
   start: { ...PRESETS[0], label: PRESETS[0].name },
   pref: 'both', minutes: 30, speed: 'normal',
+  cross: 'residential', // 横断歩道を必ず使う道: major / residential / all
   area: null,           // {center, radius, parsed, graph, source}
   results: null, selected: 0,
   diag: {},
@@ -190,6 +192,9 @@ function renderSetup() {
       el('div', { class: 'range-row' }, el('input', { type: 'range', min: 10, max: 90, step: 5, value: S.minutes, 'aria-label': '使える時間（分）', oninput: e => { S.minutes = +e.target.value; $('#minOut').textContent = `あと ${S.minutes} 分`; }, onchange: renderSetup }), el('output', { id: 'minOut' }, `あと ${S.minutes} 分`))),
     el('div', { class: 'field' }, el('span', { class: 'label' }, '歩く速さ'),
       seg(Object.keys(SPEEDS).map(k => [k, '', SPEED_LABEL[k], `${(SPEEDS[k] * 60 / 1000).toFixed(1)}km/h`]), S.speed, v => { S.speed = v; renderSetup(); }, 'small')),
+    el('div', { class: 'field' }, el('span', { class: 'label' }, '横断歩道を必ず使う道'),
+      seg(Object.entries(CROSS_OPT).map(([v, o]) => [v, '', o.label, o.sub]), S.cross, v => { S.cross = v; renderSetup(); }, 'small'),
+      S.cross === 'all' ? el('p', { class: 'hint' }, '路地では横断歩道が地図データに載っていないことが多く、遠回りになったりルートが見つからなかったりします') : null),
     el('button', { class: 'btn primary', type: 'button', id: 'go', onclick: search }, 'ルートを探す'));
 }
 
@@ -223,7 +228,7 @@ async function search() {
     const snap = g.nearestNode(g.proj.x(S.start.lon), g.proj.y(S.start.lat));
     if (!snap || snap.dist > 300) throw new Error('出発地の近くに歩ける道が見つかりませんでした。別の場所を指定してください。');
     renderLoading('ルートを組み立て中…', 0);
-    const { routes, diag } = await generateLoops(g, snap.node, { pref: S.pref, minutes: S.minutes, speed, onProgress: p => renderLoading('ルートを組み立て中…', p) });
+    const { routes, diag } = await generateLoops(g, snap.node, { pref: S.pref, minutes: S.minutes, speed, crossing: S.cross, onProgress: p => renderLoading('ルートを組み立て中…', p) });
     S.diag.route = diag; S.diag.reused = reused; S.diag.snap = Math.round(snap.dist);
     S.results = { routes, startNode: snap.node, speed };
     S.selected = 0;
@@ -249,7 +254,8 @@ function renderResults() {
   setSummary(cur ? `${S.selected === 0 ? '★ ' : ''}${cur.title} ・ 約${Math.round(cur.minutes)}分` : '条件に合うルートが見つかりませんでした');
   const sat = best ? (S.pref === 'green' ? best.stats.greenShare : S.pref === 'water' ? best.stats.waterShare : best.stats.anyShare) : 0;
   if (!best) {
-    children.push(el('div', { class: 'notice' }, el('b', {}, '条件に合うルートが見つかりませんでした'), '時間を長くするか、出発地を変えてみてください。'));
+    children.push(el('div', { class: 'notice' }, el('b', {}, '条件に合うルートが見つかりませんでした'), '時間を長くするか、出発地を変えてみてください。',
+      S.cross !== 'major' ? el('div', { class: 'row' }, el('button', { class: 'chip', type: 'button', onclick: () => { S.cross = S.cross === 'all' ? 'residential' : 'major'; search(); } }, `横断歩道の条件を「${CROSS_OPT[S.cross === 'all' ? 'residential' : 'major'].label}」にゆるめて探す`)) : null));
   } else if (sat < 0.15) {
     const alt = S.pref === 'water' ? 'green' : S.pref === 'green' ? 'water' : null;
     children.push(el('div', { class: 'notice' }, el('b', {}, `この周辺では${PREF[S.pref].label}に触れる道がほとんどありません`),

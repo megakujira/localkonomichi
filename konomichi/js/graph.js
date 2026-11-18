@@ -117,9 +117,14 @@ class FeatureIndex {
   }
 }
 
-// 横断の判定: この種類の車道を横切るときは横断歩道・信号を通す（通れない所では横断させない）
-// service(敷地内通路・路地) / living_street(歩行者優先道路) / track は車道として扱わない
-const MAJOR_ROADS = new Set(['residential', 'unclassified', 'tertiary', 'tertiary_link', 'secondary', 'secondary_link', 'primary', 'primary_link']);
+// 横断の判定: 車道の種類ごとの段階。ユーザーが選んだ段階までの車道は、横断歩道・信号のある所でしか渡らせない
+//   1 = 幹線道路 / 2 = 住宅街の道 / 3 = 路地・敷地内通路(service)・歩行者優先道路(living_street)・農道(track)
+const CAR_LEVEL = {
+  primary: 1, primary_link: 1, secondary: 1, secondary_link: 1, tertiary: 1, tertiary_link: 1,
+  residential: 2, unclassified: 2,
+  service: 3, living_street: 3, track: 3,
+};
+export const CROSS_LEVELS = { major: 1, residential: 2, all: 3 };
 const CROSSWALK_SNAP = 20;   // 横断歩道・信号ノードからこの距離(m)以内の交差点は「横断歩道あり」とみなす
 export const CROSS_NONE = 0, CROSS_MARKED = 1, CROSS_UNMARKED = 2;
 
@@ -151,17 +156,17 @@ export class Graph {
       if (i === undefined) { i = nx.length; idToIdx.set(id, i); nx.push(proj.x(p.lon)); ny.push(proj.y(p.lat)); }
       return i;
     };
-    const ea = [], eb = [], elen = [], erf = [], eway = [], eunder = [], emajor = [], ecross = [];
+    const ea = [], eb = [], elen = [], erf = [], eway = [], eunder = [], ecar = [], ecross = [];
     parsed.roads.forEach((r, wi) => {
       const rf = roadFactor(r.tags);
-      const major = MAJOR_ROADS.has(r.tags.highway) ? 1 : 0, cross = isCrosswalk(r.tags) ? 1 : 0;
+      const car = CAR_LEVEL[r.tags.highway] || 0, cross = isCrosswalk(r.tags) ? 1 : 0;
       const under = (r.tags.tunnel && r.tags.tunnel !== 'no' && r.tags.tunnel !== 'building_passage') || r.tags.covered === 'yes' || (r.tags.layer && Number(r.tags.layer) < 0);
       for (let i = 0; i + 1 < r.pts.length; i++) {
         const a = nodeOf(r.nodes[i], r.pts[i]), b = nodeOf(r.nodes[i + 1], r.pts[i + 1]);
         if (a === b) continue;
         const len = Math.hypot(nx[a] - nx[b], ny[a] - ny[b]);
         if (len < 0.5) continue;
-        ea.push(a); eb.push(b); elen.push(len); erf.push(rf); eway.push(wi); eunder.push(under ? 1 : 0); emajor.push(major); ecross.push(cross);
+        ea.push(a); eb.push(b); elen.push(len); erf.push(rf); eway.push(wi); eunder.push(under ? 1 : 0); ecar.push(car); ecross.push(cross);
       }
     });
     const N = nx.length, E = ea.length;
@@ -170,7 +175,7 @@ export class Graph {
     this.ea = Int32Array.from(ea); this.eb = Int32Array.from(eb);
     this.elen = Float32Array.from(elen); this.erf = Float32Array.from(erf);
     this.eway = Int32Array.from(eway);
-    this.emajor = Uint8Array.from(emajor);   // 車道（横断に横断歩道が必要な道）
+    this.ecar = Uint8Array.from(ecar);       // 車道の段階（0 = 車道ではない, 1〜3 = CAR_LEVEL）
     this.ecross = Uint8Array.from(ecross);   // footway=crossing（横断歩道そのものの線）
     this.roads = parsed.roads;
 
@@ -193,16 +198,16 @@ export class Graph {
       this.adjAng[k] = Math.atan2(this.ny[v] - this.ny[u], this.nx[v] - this.nx[u]);
       if (firstSlot[e] < 0) firstSlot[e] = k; else { this.adjRev[k] = firstSlot[e]; this.adjRev[firstSlot[e]] = k; }
     }
-    // 幹線車道が2本以上つながるノード（ここでだけ横断が起こりうる）と、横断歩道の有無
-    this.majorDeg = new Uint8Array(N);
-    for (let u = 0; u < N; u++) { let c = 0; for (let k = deg[u]; k < deg[u + 1]; k++) c += emajor[this.adjEdge[k]]; this.majorDeg[u] = Math.min(c, 255); }
+    // 車道が2本以上つながるノード（ここでだけ横断が起こりうる）と、横断歩道の有無
+    this.carDeg = new Uint8Array(N);
+    for (let u = 0; u < N; u++) { let c = 0; for (let k = deg[u]; k < deg[u + 1]; k++) c += ecar[this.adjEdge[k]] ? 1 : 0; this.carDeg[u] = Math.min(c, 255); }
     this.crosswalkNode = new Uint8Array(N);
     const cw = (parsed.crossings || []).map(c => [proj.x(c.lon), proj.y(c.lat)]);
     if (cw.length) {
       const cg = new Map(), cs = CROSSWALK_SNAP;
       for (const [x, y] of cw) { const k = ck(Math.floor(x / cs), Math.floor(y / cs)); let a = cg.get(k); if (!a) cg.set(k, a = []); a.push(x, y); }
       for (let u = 0; u < N; u++) {
-        if (this.majorDeg[u] < 2) continue;
+        if (this.carDeg[u] < 2) continue;
         const cx = Math.floor(this.nx[u] / cs), cy = Math.floor(this.ny[u] / cs);
         search: for (let ix = cx - 1; ix <= cx + 1; ix++) for (let iy = cy - 1; iy <= cy + 1; iy++) {
           const a = cg.get(ck(ix, iy)); if (!a) continue;
@@ -316,18 +321,19 @@ export class Graph {
   }
 
   /**
-   * ノード v で、スロット kIn の方向から来て kOut の方向へ出るとき、幹線車道を横切るか。
+   * ノード v で、スロット kIn の方向から来て kOut の方向へ出るとき、段階 level までの車道を横切るか。
    * kIn/kOut はどちらも v から見たスロット（kIn は来た道を逆にたどる向き）。
    * 来た道・出る道以外の幹線車道が左右の両側にあれば、その車道を横切っている。
    * 車道の上を歩いて(=その道の歩道を歩いて)脇道へ入るだけなら横断とはみなさない。
    */
-  crossingAt(v, kIn, kOut) {
-    if (this.majorDeg[v] < 2 || kIn === kOut) return CROSS_NONE;
+  crossingAt(v, kIn, kOut, level = CROSS_LEVELS.residential) {
+    if (this.carDeg[v] < 2 || kIn === kOut) return CROSS_NONE;
     const TAU = 2 * Math.PI, a0 = this.adjAng[kIn];
     const span = ((this.adjAng[kOut] - a0) % TAU + TAU) % TAU;
     let left = 0, right = 0;
     for (let k = this.adjStart[v]; k < this.adjStart[v + 1]; k++) {
-      if (k === kIn || k === kOut || !this.emajor[this.adjEdge[k]]) continue;
+      const c = this.ecar[this.adjEdge[k]];
+      if (k === kIn || k === kOut || !c || c > level) continue;
       const r = ((this.adjAng[k] - a0) % TAU + TAU) % TAU;
       if (r > 0 && r < span) left++; else if (r > span) right++;
     }
