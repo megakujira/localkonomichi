@@ -7,8 +7,8 @@ const SCENIC_K = 3;      // 景観の乏しい道に掛ける割増（コスト 
 const REUSE_MULT = 4;    // すでに通った道を再度通るときの割増（往復を避ける）
 const NEAR_MULT = 1.8;   // すでに通った道のすぐ近く(並行する歩道など)を通るときの割増
 const NEAR_R = 30;
-// 幹線車道を横切るときの追加コスト（長さ換算）。横断歩道・信号のない所は大きく割増して避ける
-const CROSS_COST = { [CROSS_MARKED]: 15, [CROSS_UNMARKED]: 600 };
+// 車道を横切るときの追加コスト（長さ換算）。横断歩道・信号のない所では横断させない
+const CROSS_COST = { [CROSS_MARKED]: 15, [CROSS_UNMARKED]: Infinity };
 
 // ---------------- 二分ヒープ ----------------
 class Heap {
@@ -37,7 +37,8 @@ class Heap {
 
 // ---------------- A* ----------------
 // 状態は「どのスロット(向き付きエッジ)で着いたか」。道から道への乗り換え(=車道の横断)にコストを掛けるため。
-function astar(g, src, dst, base, used) {
+// inSlot: 前の区間から src に着いた向き（src から見て来た道を逆にたどるスロット）。つなぎ目での横断も判定する
+function astar(g, src, dst, base, used, inSlot = -1) {
   if (src === dst) return { nodes: [src], edges: [] };
   const S = g.adjNode.length;
   const ws = g._ws || (g._ws = { dist: new Float64Array(S), prev: new Int32Array(S), closed: new Uint8Array(S) });
@@ -48,7 +49,8 @@ function astar(g, src, dst, base, used) {
   const cost = e => base[e] * (used && used[e] ? (used[e] === 1 ? REUSE_MULT : NEAR_MULT) : 1);
   const heap = new Heap();
   for (let k = g.adjStart[src]; k < g.adjStart[src + 1]; k++) {
-    const c = cost(g.adjEdge[k]);
+    let c = cost(g.adjEdge[k]);
+    if (inSlot >= 0) { const x = g.crossingAt(src, inSlot, k); if (x) c += CROSS_COST[x]; }
     if (c < dist[k]) { dist[k] = c; prev[k] = -1; heap.push(c + h(g.adjNode[k]), k); }
   }
   let goal = -1;
@@ -64,6 +66,7 @@ function astar(g, src, dst, base, used) {
       let nd = dist[k] + cost(g.adjEdge[q]);
       const x = g.crossingAt(v, back, q);
       if (x) nd += CROSS_COST[x];
+      if (nd === Infinity) continue;
       if (nd < dist[q]) { dist[q] = nd; prev[q] = k; heap.push(nd + h(g.adjNode[q]), q); }
     }
   }
@@ -263,7 +266,7 @@ export async function generateLoops(g, startNode, { pref = 'both', minutes = 30,
         let nodes = [startNode], edges = [];
         let ok = true;
         for (const [from, to] of [[startNode, A], [A, B], [B, startNode]]) {
-          const r = astar(g, from, to, base, used);
+          const r = astar(g, from, to, base, used, edges.length ? g.slotOf(from, edges[edges.length - 1]) : -1);
           if (!r) { ok = false; break; }
           markUsed(g, used, r.nodes, r.edges);
           nodes.push(...r.nodes.slice(1)); edges.push(...r.edges);
@@ -288,6 +291,7 @@ export async function generateLoops(g, startNode, { pref = 'both', minutes = 30,
     const m = evaluate(g, c.edges, c.nodes, L);
     if (m.len > L * 1.08 || m.len < L * 0.6) continue;           // 指定時間に収まらない
     const tc = countTurns(g, c.nodes), cross = countCrossings(g, c.nodes, c.edges);
+    if (cross.unmarked) continue;                                  // 横断歩道のない所で車道を渡るルートは出さない
     scored.push({ ...c, m, turns: tc.turns, crossings: cross, obj: objective(pref, m, tc, L, cross) });
   }
   scored.sort((a, b) => b.obj - a.obj);

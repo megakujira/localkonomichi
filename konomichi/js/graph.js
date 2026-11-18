@@ -117,8 +117,9 @@ class FeatureIndex {
   }
 }
 
-// 横断の判定: この種類の車道を横切るときは横断歩道・信号を通す
-const MAJOR_ROADS = new Set(['tertiary', 'tertiary_link', 'secondary', 'secondary_link', 'primary', 'primary_link']);
+// 横断の判定: この種類の車道を横切るときは横断歩道・信号を通す（通れない所では横断させない）
+// service(敷地内通路・路地) / living_street(歩行者優先道路) / track は車道として扱わない
+const MAJOR_ROADS = new Set(['residential', 'unclassified', 'tertiary', 'tertiary_link', 'secondary', 'secondary_link', 'primary', 'primary_link']);
 const CROSSWALK_SNAP = 20;   // 横断歩道・信号ノードからこの距離(m)以内の交差点は「横断歩道あり」とみなす
 export const CROSS_NONE = 0, CROSS_MARKED = 1, CROSS_UNMARKED = 2;
 
@@ -169,7 +170,7 @@ export class Graph {
     this.ea = Int32Array.from(ea); this.eb = Int32Array.from(eb);
     this.elen = Float32Array.from(elen); this.erf = Float32Array.from(erf);
     this.eway = Int32Array.from(eway);
-    this.emajor = Uint8Array.from(emajor);   // 幹線系の車道
+    this.emajor = Uint8Array.from(emajor);   // 車道（横断に横断歩道が必要な道）
     this.ecross = Uint8Array.from(ecross);   // footway=crossing（横断歩道そのものの線）
     this.roads = parsed.roads;
 
