@@ -268,13 +268,14 @@ function drawRoutes() {
 function startGuide() {
   const route = S.results.routes[S.selected], g = S.area.graph;
   const ins = buildInstructions(g, route);
-  S.guide = { route, ...ins, along: 0, off: 0, offCount: 0, sim: null, watch: null, finished: false, lastFix: null, speed: S.results.speed };
+  S.guide = { route, ...ins, along: 0, off: 0, offCount: 0, sim: null, follow: true, watch: null, finished: false, lastFix: null, speed: S.results.speed };
   document.body.classList.add('guiding');
   $('#panel').classList.add('hidden'); $('#guideTop').classList.remove('hidden'); $('#guideBottom').classList.remove('hidden');
   // 曲がり角マーカー
   for (const st of S.guide.steps.slice(1, -1)) L.marker([st.lat, st.lon], { interactive: false, keyboard: false, icon: L.divIcon({ className: '', html: '<div class="pin-turn"></div>', iconSize: [14, 14], iconAnchor: [7, 7] }) }).addTo(routeLayer);
   meMarker = L.marker([ins.steps[0].lat, ins.steps[0].lon], { interactive: false, keyboard: false, zIndexOffset: 1000, icon: L.divIcon({ className: '', html: '<div class="pin-me"></div>', iconSize: [22, 22], iconAnchor: [11, 11] }) }).addTo(map);
   map.setView([ins.steps[0].lat, ins.steps[0].lon], 18);
+  setFollow(true);
   if (navigator.geolocation) S.guide.watch = navigator.geolocation.watchPosition(onFix, () => toast('位置情報を取得できません。「デモ歩行」で操作を試せます', 5000), { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 });
   renderGuide();
 }
@@ -288,8 +289,18 @@ function onFix(p) {
   G.offCount = loc.off > 60 ? G.offCount + 1 : 0;
   G.off = loc.off;
   if (G.offCount === 0) G.along = Math.max(G.along, loc.along);
-  renderGuide(); map.panTo([p.coords.latitude, p.coords.longitude], { animate: true });
+  renderGuide(); if (G.follow) map.panTo([p.coords.latitude, p.coords.longitude], { animate: true });
 }
+
+// 地図を指で動かしたら自動追従を止め、「現在地に戻る」で再開する
+function setFollow(on) {
+  const G = S.guide; if (!G) return;
+  G.follow = on;
+  $('#btnRecenter').classList.toggle('hidden', on);
+  if (on && meMarker) map.panTo(meMarker.getLatLng(), { animate: true });
+}
+map.on('dragstart', () => { if (S.guide && S.guide.follow) setFollow(false); });
+$('#btnRecenter').addEventListener('click', () => setFollow(true));
 
 function pointAt(G, along) {
   const g = S.area.graph, nodes = G.route.nodes, cum = G.cum;
@@ -305,7 +316,7 @@ function toggleSim() {
   G.offCount = 0; G.off = 0;
   G.sim = setInterval(() => {
     G.along = Math.min(G.total, G.along + 9);           // 実速度の約30倍
-    const ll = pointAt(G, G.along); meMarker.setLatLng(ll); map.panTo(ll, { animate: false });
+    const ll = pointAt(G, G.along); meMarker.setLatLng(ll); if (G.follow) map.panTo(ll, { animate: false });
     renderGuide();
     if (G.along >= G.total) { clearInterval(G.sim); G.sim = null; }
   }, 250);
@@ -355,7 +366,7 @@ function endGuide() {
   if (G.sim) clearInterval(G.sim);
   if (meMarker) { map.removeLayer(meMarker); meMarker = null; }
   S.guide = null;
-  $('#guideTop').classList.add('hidden'); $('#guideBottom').classList.add('hidden'); $('#panel').classList.remove('hidden');
+  $('#guideTop').classList.add('hidden'); $('#guideBottom').classList.add('hidden'); $('#btnRecenter').classList.add('hidden'); $('#panel').classList.remove('hidden');
   document.body.classList.remove('guiding');
   if (S.results) { renderResults(); } else renderSetup();
 }
