@@ -383,9 +383,12 @@ function renderGuide() {
     top.replaceChildren(el('div', { class: 'arrow', 'aria-hidden': 'true' }, '⚠'), el('div', {}, el('div', { class: 'big' }, 'ルートから外れています'), el('div', { class: 'via' }, `約${Math.round(G.off)}m 離れています`)));
   } else {
     const first = idx === 1 && G.along < 10 && steps[0].via;
+    const walk = steps[idx - 1]?.walk, sj = walk && (walk.side === 'right' ? '右' : '左');
+    const why = walk && (walk.why === 'turn' ? `次の角で${sj}へ曲がるため` : walk.why === 'scene' ? `${steps[idx - 1].scene || '景色'}のある側` : '歩道がなければ右側通行');
     top.replaceChildren(el('div', { class: 'arrow', 'aria-hidden': 'true' }, ARROW[st.turn] || '↑'),
       el('div', {}, el('div', { class: 'dist' }, `${roundDist(dist)}m`), el('div', { class: 'big' }, st.turn === 'goal' ? 'ゴール（出発地）' : `次の角を${st.text}`),
-        el('div', { class: 'via' }, [first ? `出発: ${steps[0].via}を進む` : '', st.via ? `${st.via}を進む` : '', st.scene ? `${st.sceneType === 'water' ? '💧' : '🌳'} ${st.scene}沿い` : ''].filter(Boolean).join(' ・ '))));
+        el('div', { class: 'via' }, [first ? `出発: ${steps[0].via}を進む` : '', st.via ? `${st.via}を進む` : '', st.scene ? `${st.sceneType === 'water' ? '💧' : '🌳'} ${st.scene}沿い` : ''].filter(Boolean).join(' ・ ')),
+        walk ? el('div', { class: 'side' }, el('b', {}, `🚶 道の${sj}側を歩く`), el('small', {}, why)) : null));
   }
   const bottom = $('#guideBottom');
   bottom.replaceChildren(

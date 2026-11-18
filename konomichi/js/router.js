@@ -366,6 +366,37 @@ export function routeLatLngs(g, route) {
 // ---------------- ターン案内 ----------------
 const HIGHWAY_JA = { footway: '歩道', path: '小道', pedestrian: '歩行者道', cycleway: '自転車道', steps: '階段', track: '農道', living_street: '生活道路' };
 
+// ---------------- 道の左右どちら側を歩くか ----------------
+// ルート上のノード a〜b の区間（角から次の角まで）について、歩くとよい側を決める。
+// 優先順: ① 次に曲がる側（曲がるときに車道を渡らずに済む） ② 緑・水辺のある側 ③ 右側（歩道のない道は右側通行）
+// 車道ではない道（歩道・公園内の道など）が中心の区間は、左右を気にしなくてよいので null。
+const SIDE_OFFSETS = [10, 22];   // 道の中心から左右に何m離れた地点の景色を見るか
+function legSide(g, route, a, b, next) {
+  let len = 0, car = 0;
+  for (let i = a; i < b; i++) { const e = route.edges[i], l = g.elen[e]; len += l; if (g.ecar[e]) car += l; }
+  if (!len || car < len * 0.5) return null;
+  if (next && /(^|-)(right|left)$/.test(next.turn)) return { side: next.turn.endsWith('right') ? 'right' : 'left', why: 'turn' };
+  const tmp = {};
+  let L = 0, R = 0, n = 0;
+  for (let i = a; i < b; i++) {
+    if (!g.ecar[route.edges[i]]) continue;
+    const u = route.nodes[i], v = route.nodes[i + 1];
+    const dx = g.nx[v] - g.nx[u], dy = g.ny[v] - g.ny[u], l = Math.hypot(dx, dy);
+    if (l < 1) continue;
+    const rx = dy / l, ry = -dx / l;   // 進行方向の右手（x=東, y=北）
+    for (let d = 5; d < l; d += 10) {
+      const x = g.nx[u] + dx * d / l, y = g.ny[u] + dy * d / l;
+      for (const o of SIDE_OFFSETS) {
+        g.featureIndex.score(x + rx * o, y + ry * o, tmp); R += Math.max(tmp.g, tmp.w);
+        g.featureIndex.score(x - rx * o, y - ry * o, tmp); L += Math.max(tmp.g, tmp.w);
+        n++;
+      }
+    }
+  }
+  if (n && Math.abs(L - R) / n >= 0.25 && Math.max(L, R) / n >= 0.35) return { side: L > R ? 'left' : 'right', why: 'scene' };
+  return { side: 'right', why: 'rule' };
+}
+
 export function buildInstructions(g, route) {
   const nodes = route.nodes, n = nodes.length;
   const cum = new Float64Array(n);
@@ -409,7 +440,7 @@ export function buildInstructions(g, route) {
   };
 
   const steps = [];
-  const mk = (i, extra) => ({ at: cum[i], node: nodes[i], lat: g.proj.lat(g.ny[nodes[i]]), lon: g.proj.lon(g.nx[nodes[i]]), ...extra });
+  const mk = (i, extra) => ({ at: cum[i], i, node: nodes[i], lat: g.proj.lat(g.ny[nodes[i]]), lon: g.proj.lon(g.nx[nodes[i]]), ...extra });
   steps.push(mk(0, { turn: 'start', text: '出発', via: viaOf(route.edges[0]), scene: sceneOf(route.edges[0]), sceneType: sceneType(route.edges[0]) }));
   for (const p of picked) {
     const eNext = route.edges[p.i];
@@ -418,6 +449,8 @@ export function buildInstructions(g, route) {
   }
   steps.push(mk(n - 1, { turn: 'goal', text: 'ゴール（出発地に戻ります）', via: '', scene: '', sceneType: '' }));
   steps.forEach((st, k) => { st.next = k + 1 < steps.length ? steps[k + 1].at - st.at : 0; });
+  // 各角から次の角までの区間で、道の左右どちら側を歩くか
+  steps.forEach((st, k) => { st.walk = k + 1 < steps.length ? legSide(g, route, st.i, steps[k + 1].i, steps[k + 1]) : null; });
   return { steps, total, cum };
 }
 
